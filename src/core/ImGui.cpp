@@ -2391,6 +2391,7 @@ void Engine::renderImGui() {
                                         { "Shadows", "Renders the cascades into the shadow atlas (data/shadows.json)." },
                                         { "Cloud Shadow Map", "Shadow map of the global cloud layer." },
                                         { "Rain TopDown Depth", "Top-down depth used to place rain splashes.\nRuns every 8 frames, so it alternates between 0 and its full cost." },
+                                        { "Skinning", "Compute pass that poses animated models (joints and morph targets)\nbefore the G-buffer. Scales with the deformed vertex count; 0 when nothing is animated." },
                                     }},
                                     { "Lighting", "Full-screen passes that consume the G-buffer.",
                                       IM_COL32(255, 190, 90, 255), {

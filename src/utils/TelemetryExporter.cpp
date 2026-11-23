@@ -325,6 +325,8 @@ void TelemetryExporter::recordFrame(const FrameStats& st) {
         {"tri_models", st.triModels}, {"tri_terrain", st.triTerrain},
         {"triangles", st.triModels + st.triTerrain},
         {"draw_calls", st.drawCalls},
+        // Skinning: com gpu["Skinning"] da' o custo por vertice deformado.
+        {"skin_vertices", st.skinVertices}, {"skin_joints", st.skinJoints},
         // AGRUPAMENTO de draw calls (nao e' cache - ver FrameStats).
         // batch_runs = baldes (malha,LOD) = binds/draws; batch_reuse =
         // instancias absorvidas por um balde ja' aberto.

@@ -349,6 +349,10 @@ public:
     size_t lastVisibleCount() const { return m_visibleInstanceIndices.size(); }
     uint32_t lastDrawnTriangles() const { return m_lastDrawnTriangles; }
     uint32_t lastDrawCalls() const { return m_lastDrawCalls; }
+    // Vertices deformados e ossos enviados pelo ultimo updateSkinning (0 se
+    // nada foi animado): com o tempo "Skinning" dao o custo por vertice.
+    uint32_t lastSkinVertices() const { return m_lastSkinVertices; }
+    uint32_t lastSkinJoints() const { return m_lastSkinJoints; }
     // "Cache hit/miss" do agrupamento por (malha,LOD) em sortVisibleByMesh -
     // ver o comentario la'. Reflete o ultimo passe que chamou o sort (cena,
     // sombra ou minimapa - o que rodou por ultimo nesse frame).
@@ -1725,6 +1729,7 @@ private:
     uint8_t shadowLevelFor(const ModelInstanceHot& hot, const ModelMeshGPU& mesh) const;
     uint32_t m_lastDrawnTriangles = 0;
     uint32_t m_lastDrawCalls = 0;
+    uint32_t m_lastSkinVertices = 0, m_lastSkinJoints = 0;
 };
 
 } // namespace eruption

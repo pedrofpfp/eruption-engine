@@ -53,6 +53,10 @@ public:
         uint32_t triModels = 0;   // passe principal de modelos
         uint32_t triTerrain = 0;  // terreno, no mesmo passe G-Buffer
         uint32_t drawCalls = 0;
+        // Skinning do frame (ModelRenderer::updateSkinning): vertices
+        // deformados e ossos enviados. O tempo sai em gpu["Skinning"].
+        uint32_t skinVertices = 0;
+        uint32_t skinJoints = 0;
         // PIPELINE STATISTICS do passe de geometria (contagem do DRIVER, nao
         // da CPU). triModels/triTerrain acima sao o que a engine SUBMETE; isto
         // e' o que o pipeline processou de fato. A diferenca importa pra

@@ -3635,6 +3635,8 @@ void Engine::recordTelemetry() {
     st.triModels = m_modelRenderer.lastDrawnTriangles();
     st.triTerrain = m_terrainRenderer.lastDrawnTriangles();
     st.drawCalls = m_modelRenderer.lastDrawCalls();
+    st.skinVertices = m_modelRenderer.lastSkinVertices();
+    st.skinJoints = m_modelRenderer.lastSkinJoints();
     st.batchReuse = m_modelRenderer.lastCacheHits();
     st.batchRuns  = m_modelRenderer.lastCacheMisses();
     st.lodSwaps = m_modelRenderer.lastPopStats().lodSwaps;

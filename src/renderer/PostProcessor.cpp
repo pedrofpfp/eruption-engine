@@ -27,12 +27,12 @@ namespace eruption {
 // 7-10 ms na chuva, sem dizer se era overlay, particula, bloom ou composite.
 //
 // Mapa de ocupacao do pool de timestamps (VulkanContext::TIMESTAMP_QUERY_COUNT
-// = 64), confirmado por grep em 2026-09-02:
+// = 66), confirmado por grep em 2026-11-23. Nenhum indice livre:
 //    0-11  Engine  (sombra 0-1, gbuffer 2-3, deferred 4-5, skybox 6-7,
 //                   POST TOTAL 8-9, agua 10-11)
-//   12-15  Engine  (VFX sim 12-13, 14-15)
+//   12-15  Engine  (VFX sim 12-13, VFX draw 14-15)
 //   16-17  VolumetricLight (luz volumetrica do sol, antes do post)
-//   18-19  LIVRES
+//   18-19  Engine  ("Script Draw", ImmediateDraw em Render.cpp)
 //   20-29  Engine  (cloud shadow map 20-21, minimapa 22-23, rain topdown
 //                   24-25, cloud layers 26-27, cloud shadows field 28-29)
 //   30-35  PostProcessor (heightmap 30-31, overlay 32-33, particulas 34-35)
@@ -41,8 +41,9 @@ namespace eruption {
 //   42-53  PostProcessor (ESTE bloco)
 //   54-55  Engine  (FSR)
 //   56-59  PostProcessor (raios de luz 56-57, halation 58-59)
-//   60-61  Engine
-//   62-63  LIVRES
+//   60-61  Engine  ("Sprite Shadow Decal")
+//   62-63  Engine  ("Water Reflection", WaterReflection.cpp)
+//   64-65  ModelRenderer (skinning, ModelSkinning.cpp)
 //
 // CUIDADO ao ler a soma: sao timestamps de BOTTOM_OF_PIPE, e a GPU pode
 // sobrepor passes vizinhos. Por isso o residuo vira um passe proprio

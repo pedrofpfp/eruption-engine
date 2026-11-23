@@ -8,6 +8,7 @@
 #include "core/Logger.hpp"
 #include "formats/TerrainParser.hpp"
 #include "renderer/ShaderCompiler.hpp"
+#include "utils/Profiler.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -31,6 +32,9 @@ struct SkinPush {
     uint32_t jointCount, morphCount, morphBase; // morphBase em floats no anel
 };
 constexpr uint32_t kSkinBindings = 7;
+// Timestamps do bloco de dispatches (mapa de ocupação em PostProcessor.cpp).
+constexpr uint32_t kQSkinBegin = 64;
+constexpr uint32_t kQSkinEnd = 65;
 
 } // namespace
 
@@ -480,6 +484,10 @@ std::string ModelRenderer::currentAnimation(uint32_t instance) const {
 }
 
 void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
+    // Zerados antes de qualquer saída: num frame sem skinning a telemetria
+    // mostra 0, e não a contagem velha do último frame que animou.
+    m_lastSkinVertices = 0;
+    m_lastSkinJoints = 0;
     if (m_skinned.empty() || !m_skinPipeline || !m_jointMapped) return;
     const uint32_t frame = m_ctx->currentFrame() % VulkanContext::MAX_FRAMES_IN_FLIGHT;
     glm::mat4* ring = m_jointMapped + size_t(frame) * kJointsPerFrame;
@@ -574,10 +582,18 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
         cursor += joints + morphSlots;
     }
     if (jobs.empty()) return;
+    for (const Job& j : jobs) {
+        m_lastSkinVertices += j.vertexCount;
+        m_lastSkinJoints += j.joints;
+    }
     vmaFlushAllocation(m_ctx->allocator(), m_jointRingAlloc, VkDeviceSize(frame) * kJointsPerFrame * sizeof(glm::mat4),
                        VkDeviceSize(cursor) * sizeof(glm::mat4));
     if (boundsChanged) rebuildHotData();
 
+    // Tempo de GPU do skinning: da barreira de entrada (com a cópia da primeira
+    // vez) até a de saída. Só é gravado quando há jobs; sem eles o passe aparece
+    // como 0 no Profiler (timestampDeltaMs devolve 0 para consulta não escrita).
+    m_ctx->writeTimestamp(cmd, kQSkinBegin, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     // Frames anteriores ainda podem estar lendo os vértices (barreira cobre a
     // fila toda); a pose escrita no frame anterior é lida aqui (vira a "prev").
     VkMemoryBarrier before{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr,
@@ -617,6 +633,10 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
                           VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT};
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 1, &after, 0,
                          nullptr, 0, nullptr);
+    m_ctx->writeTimestamp(cmd, kQSkinEnd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    // Como nos outros passes, o valor lido é o deste mesmo slot de frame,
+    // MAX_FRAMES_IN_FLIGHT frames atrás (resultado já pronto na fence).
+    Profiler::addGpuTime("Skinning", m_ctx->timestampDeltaMs(kQSkinBegin, kQSkinEnd));
 }
 
 } // namespace eruption
