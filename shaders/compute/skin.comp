@@ -25,6 +25,16 @@
 // e o volume fica. O anel é o mesmo: em DQS cada mat4 guarda q0 na coluna 0,
 // qe na coluna 1 e a escala uniforme em joints[k][2].x (SkinRig::jointDualQuats;
 // a réplica em C++ está em tests/test_dual_quat.cpp: mudou aqui, muda lá).
+//
+// Visualização dos pesos (p.debugView = 1, "Debug Skin Weights"): a cor do
+// vértice de saída vira soma_k w_k * cor(osso_k), com os pesos já limpos e
+// normalizados acima, então o que aparece é o que deforma. Sem influência
+// válida (ou malha só com morph) fica magenta. model_frag multiplica o albedo
+// pela cor só com alfa < 0,999 (a marca 254/255 do carregador), por isso o
+// alfa gravado é 254/255; com 255 a cor seria ignorada. A cor tinge a textura
+// (não há slot de textura branca garantido para trocar o texIndex: o slot 0 é
+// cinza 128). Ao desligar, a CPU recopia o vértice da base (needsInit) e a cor
+// original volta. Desligado, o custo é um teste de uniforme.
 layout(local_size_x = 64) in;
 
 struct SkinVertex { uint j01; uint j23; float w0; float w1; float w2; float w3; };
@@ -51,6 +61,8 @@ layout(push_constant) uniform Params {
     uint morphCount;   // alvos de morph (0 = nenhum)
     uint morphBase;    // primeiro peso no anel (em floats)
     uint mode;         // 0: LBS; 1: DQS no mesmo mat4: col 0 = q0, col 1 = qe, col 2.x = escala uniforme
+    uint debugView;    // 1: grava a cor dos pesos em dst[b + colWord]
+    uint colWord;      // offset da cor (uint RGBA8)
 } p;
 
 // Peso do osso j, ou 0 se o osso não existe na skin ou o peso não é um número
@@ -79,6 +91,15 @@ void dqAdd(uint j, float w, vec4 pivot, inout vec4 b0, inout vec4 be, inout floa
     sc += w * joints[p.jointBase + j][2].x;
 }
 
+// Cor do osso j: matiz pela razão áurea (ossos vizinhos na lista ficam com
+// matizes distantes), S = V = 1, puxada 15% para o branco para a luz não
+// apagar os tons escuros (a mesma função do protótipo da Entrega 5).
+vec3 jointColor(uint j) {
+    const float h = fract(float(j) * 0.61803398875 + 0.15);
+    const vec3 k = clamp(abs(fract(h + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
+    return mix(vec3(1.0), k, 0.85);
+}
+
 void main() {
     const uint i = gl_GlobalInvocationID.x;
     if (i >= p.vertexCount) return;
@@ -97,6 +118,7 @@ void main() {
     }
     vec3 sp = pos;
     vec3 sn = nrm;
+    vec3 weightColor = vec3(1.0, 0.0, 1.0); // sem influência: magenta
     if (p.jointCount > 0u) {
         const SkinVertex s = skin[i];
         const uint j0 = s.j01 & 0xFFFFu;
@@ -114,6 +136,8 @@ void main() {
             w1 /= wSum;
             w2 /= wSum;
             w3 /= wSum;
+            if (p.debugView == 1u)
+                weightColor = w0 * jointColor(j0) + w1 * jointColor(j1) + w2 * jointColor(j2) + w3 * jointColor(j3);
             if (p.mode == 1u) {
                 // Pivô: o primeiro osso com peso (wSum > 0 garante que existe).
                 const uint jp = w0 > 0.0 ? j0 : (w1 > 0.0 ? j1 : (w2 > 0.0 ? j2 : j3));
@@ -160,6 +184,7 @@ void main() {
     dst[b + p.nrmWord] = floatBitsToUint(sn.x);
     dst[b + p.nrmWord + 1u] = floatBitsToUint(sn.y);
     dst[b + p.nrmWord + 2u] = floatBitsToUint(sn.z);
+    if (p.debugView == 1u) dst[b + p.colWord] = packUnorm4x8(vec4(weightColor, 254.0 / 255.0));
     if (p.keepPrev == 2u) { // modo mudou: a pose anterior é de outro método
         prevDst[b + p.posWord] = floatBitsToUint(sp.x);
         prevDst[b + p.posWord + 1u] = floatBitsToUint(sp.y);

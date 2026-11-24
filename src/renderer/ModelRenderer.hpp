@@ -973,6 +973,11 @@ public:
     bool setSkinningMode(uint32_t instance, SkinMode mode);
     SkinMode skinningMode(uint32_t instance) const; // o pedido
     size_t skinnedCount() const { return m_skinned.size(); }
+    // Visualização dos pesos (depuração, global): a cor de cada vértice animado
+    // vira a mistura das cores dos seus ossos (skin.comp). Só instâncias do mapa.
+    // Desligar recopia o vértice da base e a cor original volta.
+    void setSkinWeightView(bool on);
+    bool skinWeightView() const { return m_skinWeightView; }
 
     // VISUALIZADOR DE MODELO (editor): malhas de um .glb sem instância na
     // cena, os nós com malha e uma cópia animada própria para modelos com skin.
@@ -1021,6 +1026,7 @@ private:
         VmaAllocation prevOutAlloc = VK_NULL_HANDLE;
         VkDescriptorSet set = VK_NULL_HANDLE;
         bool needsInit = true;
+        bool restorePrev = false; // recopiado ao desligar os pesos: Prev = a pose do frame
         int anim = -1;
         float time = 0.0f, speed = 1.0f;
         bool loop = true;
@@ -1743,6 +1749,7 @@ private:
     uint32_t m_lastDrawnTriangles = 0;
     uint32_t m_lastDrawCalls = 0;
     uint32_t m_lastSkinVertices = 0, m_lastSkinJoints = 0;
+    bool m_skinWeightView = false; // init lê ERUPTION_TEST_SKIN_WEIGHTS
 };
 
 } // namespace eruption

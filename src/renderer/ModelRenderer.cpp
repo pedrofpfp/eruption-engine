@@ -540,6 +540,9 @@ void ModelMeshGPU::shutdown(VulkanContext* ctx) {
 bool ModelRenderer::init(VulkanContext* ctx, BindlessDescriptor* bindless) {
     m_ctx = ctx;
     m_bindless = bindless;
+    // ERUPTION_TEST_SKIN_WEIGHTS=1: nasce com a visualização dos pesos ligada
+    // (capturas sem abrir o Object Manager; ver setSkinWeightView).
+    if (const char* e = std::getenv("ERUPTION_TEST_SKIN_WEIGHTS")) m_skinWeightView = e[0] == '1';
 
     VkSamplerCreateInfo samplerInfo{}; samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     samplerInfo.magFilter = VK_FILTER_LINEAR;

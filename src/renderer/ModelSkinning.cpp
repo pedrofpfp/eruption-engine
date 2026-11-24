@@ -34,8 +34,12 @@ struct SkinPush {
     uint32_t keepPrev;   // 0: sem Prev; 1: Prev = Dst anterior; 2: Prev = esta pose (troca de modo)
     uint32_t jointCount, morphCount, morphBase; // morphBase em floats no anel
     uint32_t mode;       // 0 LBS, 1 DQS (mat4 do anel: col0 q0, col1 qe, col2.x escala)
+    uint32_t debugView;  // 1: cor do vértice = pesos (ModelRenderer::setSkinWeightView)
+    uint32_t colWord;    // offset da cor do vértice, em palavras
 };
-static_assert(sizeof(SkinPush) == 40, "layout do Params em skin.comp");
+static_assert(sizeof(SkinPush) == 48, "layout do Params em skin.comp");
+static_assert(offsetof(SkinPush, debugView) == 40 && offsetof(SkinPush, colWord) == 44, "layout do Params em skin.comp");
+static_assert(offsetof(TerrainVertex, color) % 4 == 0, "skin.comp grava a cor como uma palavra de 32 bits");
 static_assert(sizeof(SkinPush) <= 128, "push constant acima de 128 bytes (AGENTS.md)");
 constexpr uint8_t kNoSkinMode = 0xFF; // SkinnedInstance::lastMode antes do 1º dispatch
 constexpr uint32_t kSkinBindings = 7;
@@ -520,6 +524,20 @@ ModelRenderer::SkinMode ModelRenderer::skinningMode(uint32_t instance) const {
     return it == m_skinnedByInstance.end() ? SkinMode::Lbs : m_skinned[it->second].skinMode;
 }
 
+void ModelRenderer::setSkinWeightView(bool on) {
+    if (on == m_skinWeightView) return;
+    m_skinWeightView = on;
+    if (on) return; // o shader passa a gravar a cor a partir do próximo dispatch
+    // Desligar: a cor gravada ficaria no buffer da instância. Recopiar o vértice
+    // da base (needsInit, o mesmo caminho da criação) devolve a cor original sem
+    // mais um modo no shader; custa uma cópia de buffer por instância, uma vez.
+    for (SkinnedInstance& s : m_skinned) {
+        if (s.instance == kNoInstance) continue; // o visualizador nunca recebe a cor
+        s.needsInit = true;
+        s.restorePrev = true;
+    }
+}
+
 void ModelRenderer::setPreviewSkinMode(int id, SkinMode mode) {
     if (SkinnedInstance* s = previewSkin(id)) applySkinMode(*s, mode);
 }
@@ -597,8 +615,13 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
                 if (t < s.morphOverride.size() && !std::isnan(s.morphOverride[t])) out[t] = s.morphOverride[t];
             }
         }
+        // Desligou a visualização dos pesos: needsInit (setSkinWeightView) recopia
+        // o vértice da base, posição incluída; Prev recebe esta pose, senão o
+        // motion blur riscaria da pose de bind até aqui.
+        const bool restored = s.restorePrev;
+        s.restorePrev = false;
         if (joints == 0) {
-            jobs.push_back({&s, 0u, base.vertexCount, 0u, morphs, (frame * kJointsPerFrame + cursor) * 16u, 0u, false});
+            jobs.push_back({&s, 0u, base.vertexCount, 0u, morphs, (frame * kJointsPerFrame + cursor) * 16u, 0u, restored});
             cursor += morphSlots;
             continue;
         }
@@ -620,7 +643,7 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
         if (mode == 0) rig.jointMatrices(base.skin, globals, ring + cursor);
         // Modo mudou (script, editor ou a queda acima): a pose anterior é de outro
         // método; Prev recebe a pose deste frame (keepPrev = 2) e o motion blur não risca.
-        const bool resetPrev = s.lastMode != kNoSkinMode && s.lastMode != mode;
+        const bool resetPrev = (s.lastMode != kNoSkinMode && s.lastMode != mode) || restored;
         s.lastMode = static_cast<uint8_t>(mode);
         // Limites: cada osso com o alcance dos seus vértices.
         Vec3 lo(FLT_MAX), hi(-FLT_MAX);
@@ -697,10 +720,14 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_skinPipeLayout, 0, 1, &j.s->set, 0, nullptr);
         // Sem prevOut o binding 4 aponta para `out`: keepPrev fica 0, nunca 2.
         const uint32_t keepPrev = !j.s->prevOut ? 0u : (j.resetPrev ? 2u : 1u);
+        // Pesos só nas instâncias do mapa: o visualizador do editor (kNoInstance)
+        // desenha noutro alvo e ainda não tem o modo.
+        const uint32_t debugView = m_skinWeightView && j.s->instance != kNoInstance ? 1u : 0u;
         const SkinPush p{j.vertexCount, j.jointBase, static_cast<uint32_t>(sizeof(TerrainVertex) / 4),
                          static_cast<uint32_t>(offsetof(TerrainVertex, position) / 4),
                          static_cast<uint32_t>(offsetof(TerrainVertex, normal) / 4), keepPrev,
-                         j.joints, j.morphs, j.morphBase, j.mode};
+                         j.joints, j.morphs, j.morphBase, j.mode, debugView,
+                         static_cast<uint32_t>(offsetof(TerrainVertex, color) / 4)};
         vkCmdPushConstants(cmd, m_skinPipeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
         vkCmdDispatch(cmd, (j.vertexCount + 63) / 64, 1, 1);
     }
