@@ -838,6 +838,12 @@ declare models: {
     -- Holds a morph target (name or number from 1) at `weight` (0 to 1, more
     -- exaggerates); nil gives it back to the animation. False if it doesn't exist.
     set_morph: (model: Model, target: string | number, weight: number?) -> boolean,
+    -- How the skeleton bends the mesh: "lbs" (bone matrices mixed, the default;
+    -- twisted joints lose volume) or "dqs" (dual quaternions: twists keep the
+    -- volume, a little more GPU work). A skeleton with non-uniform scale or
+    -- mirroring is drawn with "lbs" (logged once). False without a skeleton.
+    skinning: (model: Model) -> string,
+    set_skinning: (model: Model, mode: string) -> boolean,
 }
 
 -- Sound: wav, ogg, mp3 or flac files of the project. Functions that start a

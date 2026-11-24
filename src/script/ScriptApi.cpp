@@ -1327,6 +1327,21 @@ int models_animations(lua_State* L) {
     }
     return 1;
 }
+int models_skinning(lua_State* L) {
+    const auto mode = eng().modelRenderer().skinningMode(static_cast<uint32_t>(checkModel(L, 1)));
+    lua_pushstring(L, mode == ModelRenderer::SkinMode::Dqs ? "dqs" : "lbs");
+    return 1;
+}
+int models_set_skinning(lua_State* L) {
+    const auto i = static_cast<uint32_t>(checkModel(L, 1));
+    const std::string m = luaL_checkstring(L, 2);
+    if (m != "lbs" && m != "dqs") luaL_argerror(L, 2, "\"lbs\" or \"dqs\"");
+    const bool ok = eng().modelRenderer().setSkinningMode(i, m == "dqs" ? ModelRenderer::SkinMode::Dqs
+                                                                        : ModelRenderer::SkinMode::Lbs);
+    if (!ok) Logger::warning("models.set_skinning: %s has no skeleton", instances()[i].name.c_str());
+    lua_pushboolean(L, ok);
+    return 1;
+}
 
 // ---------------------------------------------------------------- game (salvar)
 
@@ -3211,6 +3226,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         ERUPTION_API_FN(models, set_surface_file),
         ERUPTION_API_FN(models, play), ERUPTION_API_FN(models, animation), ERUPTION_API_FN(models, animations),
         ERUPTION_API_FN(models, morphs), ERUPTION_API_FN(models, set_morph),
+        ERUPTION_API_FN(models, skinning), ERUPTION_API_FN(models, set_skinning),
         {nullptr, nullptr}};
     static const luaL_Reg characters[] = {
         ERUPTION_API_FN(characters, exists), ERUPTION_API_FN(characters, preload), ERUPTION_API_FN(characters, preload_ready),
@@ -4055,6 +4071,12 @@ declare models: {
     -- Holds a morph target (name or number from 1) at `weight` (0 to 1, more
     -- exaggerates); nil gives it back to the animation. False if it doesn't exist.
     set_morph: (model: Model, target: string | number, weight: number?) -> boolean,
+    -- How the skeleton bends the mesh: "lbs" (bone matrices mixed, the default;
+    -- twisted joints lose volume) or "dqs" (dual quaternions: twists keep the
+    -- volume, a little more GPU work). A skeleton with non-uniform scale or
+    -- mirroring is drawn with "lbs" (logged once). False without a skeleton.
+    skinning: (model: Model) -> string,
+    set_skinning: (model: Model, mode: string) -> boolean,
 }
 
 -- Sound: wav, ogg, mp3 or flac files of the project. Functions that start a
