@@ -73,6 +73,14 @@ struct SkinRig {
     bool morphWeights(int anim, float time, int node, float* out, uint32_t count) const;
     // Matrizes dos ossos da skin para o shader: global do osso * bind inversa.
     void jointMatrices(int skin, const std::vector<glm::mat4>& globals, glm::mat4* out) const;
+    // Quaternion duplo de cada osso para o ramo DQS de skin.comp, no mesmo mat4
+    // do anel: coluna 0 = q0 (xyzw, w >= 0), coluna 1 = qe = 0,5 (0, t) q0,
+    // coluna 2 = (escala uniforme, 0, 0, 0), coluna 3 = 0. Falso se algum osso não
+    // é rotação + escala uniforme + translação (escala não uniforme, cisalhamento,
+    // espelho): `out` fica pela metade e quem chama usa jointMatrices.
+    bool jointDualQuats(int skin, const std::vector<glm::mat4>& globals, glm::mat4* out) const;
+    // Um osso (S = global * bind inversa). Separado para tests/test_dual_quat.cpp.
+    static bool dualQuat(const glm::mat4& S, glm::mat4& out);
 };
 
 } // namespace eruption

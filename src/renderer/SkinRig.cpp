@@ -1,10 +1,19 @@
 #include "renderer/SkinRig.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 namespace eruption {
 
 namespace {
+
+// Rigidez, relativa ao quadrado da escala média: 2e-3 no comprimento² = 0,1% no
+// comprimento; 1e-3 no produto escalar = ~0,06° fora do ângulo reto. O
+// arredondamento de float numa cadeia de ossos fica perto de 1e-6.
+constexpr float kRigidLen2Tol = 2e-3f;
+constexpr float kRigidDotTol = 1e-3f;
+// Abaixo disso o osso está escondido por escala 0 (truque comum de exportador).
+constexpr float kZeroScale2 = 1e-12f;
 
 // Base de Hermite da CUBICSPLINE (glTF 2.0, apêndice C) em s = (t - t[k]) / td:
 // p = h00·v[k] + h10·b[k] + h01·v[k+1] + h11·a[k+1], com b a tangente de saída
@@ -166,6 +175,57 @@ void SkinRig::jointMatrices(int skin, const std::vector<glm::mat4>& globals, glm
         const glm::mat4 g = n >= 0 && n < static_cast<int>(globals.size()) ? globals[static_cast<size_t>(n)] : glm::mat4(1.0f);
         out[j] = g * (j < sk.inverseBind.size() ? sk.inverseBind[j] : glm::mat4(1.0f));
     }
+}
+
+bool SkinRig::dualQuat(const glm::mat4& S, glm::mat4& out) {
+    const Vec3 c0(S[0]), c1(S[1]), c2(S[2]), t(S[3]);
+    const float l0 = glm::dot(c0, c0), l1 = glm::dot(c1, c1), l2 = glm::dot(c2, c2);
+    const float s2 = (l0 + l1 + l2) / 3.0f;
+    glm::mat4 d(0.0f);
+    if (!std::isfinite(s2) || !std::isfinite(t.x + t.y + t.z)) {
+        out = d;
+        return false;
+    }
+    if (s2 < kZeroScale2) {
+        // Escala 0: rotação identidade e escala 0 levam o vértice a t, como o LBS.
+        d[0] = Vec4(0.0f, 0.0f, 0.0f, 1.0f);
+        d[1] = Vec4(0.5f * t, 0.0f);
+        out = d;
+        return true;
+    }
+    const float inv = 1.0f / s2;
+    const bool rigid = std::fabs(l0 * inv - 1.0f) <= kRigidLen2Tol && std::fabs(l1 * inv - 1.0f) <= kRigidLen2Tol &&
+                       std::fabs(l2 * inv - 1.0f) <= kRigidLen2Tol &&
+                       std::fabs(glm::dot(c0, c1)) * inv <= kRigidDotTol &&
+                       std::fabs(glm::dot(c0, c2)) * inv <= kRigidDotTol &&
+                       std::fabs(glm::dot(c1, c2)) * inv <= kRigidDotTol &&
+                       glm::dot(glm::cross(c0, c1), c2) > 0.0f;
+    if (!rigid) {
+        out = d;
+        return false;
+    }
+    const glm::mat3 R(c0 / std::sqrt(l0), c1 / std::sqrt(l1), c2 / std::sqrt(l2));
+    glm::quat q0 = glm::normalize(glm::quat_cast(R));
+    if (q0.w < 0.0f) q0 = -q0;
+    const glm::quat qe = 0.5f * (glm::quat(0.0f, t.x, t.y, t.z) * q0);
+    d[0] = Vec4(q0.x, q0.y, q0.z, q0.w);
+    d[1] = Vec4(qe.x, qe.y, qe.z, qe.w);
+    d[2] = Vec4(std::sqrt(s2), 0.0f, 0.0f, 0.0f);
+    out = d;
+    return true;
+}
+
+bool SkinRig::jointDualQuats(int skin, const std::vector<glm::mat4>& globals, glm::mat4* out) const {
+    if (skin < 0 || skin >= static_cast<int>(skins.size())) return false;
+    const Skin& sk = skins[static_cast<size_t>(skin)];
+    for (size_t j = 0; j < sk.joints.size(); ++j) {
+        const int n = sk.joints[j];
+        const glm::mat4 g = n >= 0 && n < static_cast<int>(globals.size()) ? globals[static_cast<size_t>(n)] : glm::mat4(1.0f);
+        glm::mat4 d;
+        if (!dualQuat(g * (j < sk.inverseBind.size() ? sk.inverseBind[j] : glm::mat4(1.0f)), d)) return false;
+        out[j] = d; // um mat4 inteiro por escrita: `out` é o anel mapeado (write-combined)
+    }
+    return true;
 }
 
 } // namespace eruption
