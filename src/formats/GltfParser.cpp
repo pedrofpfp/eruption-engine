@@ -1765,19 +1765,36 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
                 else if (ch.target_path == "scale") c.path = 2;
                 else if (ch.target_path == "weights") c.path = 3;
                 else continue;
-                c.step = smp.interpolation == "STEP";
+                const bool cubic = smp.interpolation == "CUBICSPLINE";
+                if (smp.interpolation == "STEP") c.interp = SkinRig::Channel::Interp::Step;
+                else if (cubic) c.interp = SkinRig::Channel::Interp::Cubic;
                 c.times = readFloatAccessor(gltf, smp.input);
                 if (c.path == 3) {
                     // Pesos de morph: N floats por chave (N = alvos da malha do nó).
                     std::vector<float> w = readFloatAccessor(gltf, smp.output);
                     const size_t keys = c.times.size();
-                    const size_t per = keys ? w.size() / (smp.interpolation == "CUBICSPLINE" ? keys * 3 : keys) : 0;
+                    const size_t per = keys ? w.size() / (cubic ? keys * 3 : keys) : 0;
                     if (per == 0) continue;
-                    if (smp.interpolation == "CUBICSPLINE") { // (tangente, valor, tangente): só o valor
+                    if (cubic) {
+                        // Trio por chave (tangente de entrada, valor, tangente de
+                        // saída), cada um com `per` floats.
+                        // Tamanho fora do padrão: fica só com os valores do meio em
+                        // LINEAR, que era o comportamento antes da cúbica.
+                        const bool exact = w.size() == keys * 3 * per;
+                        if (!exact) {
+                            ERUPTION_LOG_WARN("GltfParser: CUBICSPLINE de pesos com %zu floats para %zu chaves "
+                                              "(esperado 3 x chaves x alvos); usando LINEAR",
+                                              w.size(), keys);
+                            c.interp = SkinRig::Channel::Interp::Linear;
+                        }
                         std::vector<float> mid;
-                        for (size_t k = 0; k < keys; ++k)
-                            mid.insert(mid.end(), w.begin() + std::ptrdiff_t((k * 3 + 1) * per),
-                                       w.begin() + std::ptrdiff_t((k * 3 + 2) * per));
+                        for (size_t k = 0; k < keys; ++k) {
+                            const auto first = w.begin() + std::ptrdiff_t(k * 3 * per);
+                            const auto n = std::ptrdiff_t(per);
+                            if (exact) c.weightsIn.insert(c.weightsIn.end(), first, first + n);
+                            mid.insert(mid.end(), first + n, first + 2 * n);
+                            if (exact) c.weightsOut.insert(c.weightsOut.end(), first + 2 * n, first + 3 * n);
+                        }
                         w.swap(mid);
                     }
                     c.weightCount = static_cast<uint32_t>(per);
@@ -1787,9 +1804,24 @@ ModelFile GltfParser::parse(const uint8_t* data, size_t size,
                     continue;
                 }
                 std::vector<Vec4> vals = readAnyVec4Accessor(gltf, smp.output);
-                if (smp.interpolation == "CUBICSPLINE") { // (tangente, valor, tangente): só o valor
+                if (cubic) {
+                    // Trio por chave: (tangente de entrada, valor, tangente de saída).
                     std::vector<Vec4> mid;
                     for (size_t k = 1; k < vals.size(); k += 3) mid.push_back(vals[k]);
+                    if (vals.size() != c.times.size() * 3) {
+                        // Mesmo fallback dos pesos: valores do meio em LINEAR.
+                        ERUPTION_LOG_WARN("GltfParser: CUBICSPLINE com %zu elementos para %zu chaves "
+                                          "(esperado 3 x chaves); usando LINEAR",
+                                          vals.size(), c.times.size());
+                        c.interp = SkinRig::Channel::Interp::Linear;
+                    } else {
+                        c.inTan.reserve(mid.size());
+                        c.outTan.reserve(mid.size());
+                        for (size_t k = 0; k < vals.size(); k += 3) {
+                            c.inTan.push_back(vals[k]);
+                            c.outTan.push_back(vals[k + 2]);
+                        }
+                    }
                     vals.swap(mid);
                 }
                 c.values = std::move(vals);

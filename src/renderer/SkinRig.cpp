@@ -6,17 +6,47 @@ namespace eruption {
 
 namespace {
 
-// Valor do canal no tempo t: procura o intervalo e interpola.
-Vec4 sample(const SkinRig::Channel& c, float t) {
+// Base de Hermite da CUBICSPLINE (glTF 2.0, apêndice C) em s = (t - t[k]) / td:
+// p = h00·v[k] + h10·b[k] + h01·v[k+1] + h11·a[k+1], com b a tangente de saída
+// da chave k e a a de entrada da k+1. As tangentes do arquivo estão em
+// unidades por segundo, por isso h10 e h11 já vêm multiplicados por td.
+struct Hermite {
+    float h00, h10, h01, h11;
+};
+
+Hermite hermite(float s, float td) {
+    const float s2 = s * s;
+    const float s3 = s2 * s;
+    return {2.0f * s3 - 3.0f * s2 + 1.0f, (s3 - 2.0f * s2 + s) * td, -2.0f * s3 + 3.0f * s2, (s3 - s2) * td};
+}
+
+} // namespace
+
+// Valor do canal no tempo t: procura o intervalo e interpola. Fora do
+// intervalo das chaves devolve a ponta (sem extrapolar), em todos os modos.
+Vec4 SkinRig::sampleChannel(const Channel& c, float t) {
     if (c.times.empty() || c.values.empty()) return Vec4(0.0f);
     const size_t n = std::min(c.times.size(), c.values.size());
     if (t <= c.times.front() || n == 1) return c.values.front();
     if (t >= c.times[n - 1]) return c.values[n - 1];
     const size_t hi = static_cast<size_t>(std::upper_bound(c.times.begin(), c.times.begin() + n, t) - c.times.begin());
     const size_t lo = hi - 1;
-    if (c.step) return c.values[lo];
+    if (c.interp == Channel::Interp::Step) return c.values[lo];
     const float span = c.times[hi] - c.times[lo];
     const float f = span > 0.0f ? (t - c.times[lo]) / span : 0.0f;
+    // Cubic só com as duas tangentes cobrindo as chaves usadas; um canal
+    // montado à mão (ou truncado) sem elas cai no LINEAR abaixo em vez de
+    // ler fora do vetor.
+    if (c.interp == Channel::Interp::Cubic && span > 0.0f && c.inTan.size() >= n && c.outTan.size() >= n) {
+        const Hermite h = hermite(f, span);
+        const Vec4 p = h.h00 * c.values[lo] + h.h10 * c.outTan[lo] + h.h01 * c.values[hi] + h.h11 * c.inTan[hi];
+        if (c.path != 1) return p;
+        // Rotação: a especificação manda Hermite nos 4 componentes e
+        // normalizar, não slerp. Quaternion nulo (tangentes absurdas) fica
+        // com a chave de baixo em vez de virar NaN.
+        const float len = glm::length(p);
+        return len > 1e-8f ? p / len : c.values[lo];
+    }
     if (c.path == 1) {
         const glm::quat a(c.values[lo].w, c.values[lo].x, c.values[lo].y, c.values[lo].z);
         const glm::quat b(c.values[hi].w, c.values[hi].x, c.values[hi].y, c.values[hi].z);
@@ -25,6 +55,8 @@ Vec4 sample(const SkinRig::Channel& c, float t) {
     }
     return glm::mix(c.values[lo], c.values[hi], f);
 }
+
+namespace {
 
 // Posição, rotação e escala locais de cada nó (a de repouso onde a animação
 // não tem canal).
@@ -42,7 +74,7 @@ void localPose(const SkinRig& rig, int anim, float time, std::vector<Vec3>& t, s
     if (anim < 0 || anim >= static_cast<int>(rig.animations.size())) return;
     for (const SkinRig::Channel& c : rig.animations[static_cast<size_t>(anim)].channels) {
         if (c.node < 0 || c.node >= static_cast<int>(n) || c.path > 2) continue; // pesos de morph: morphWeights
-        const Vec4 v = sample(c, time);
+        const Vec4 v = SkinRig::sampleChannel(c, time);
         const size_t k = static_cast<size_t>(c.node);
         if (c.path == 0) t[k] = Vec3(v);
         else if (c.path == 1) r[k] = glm::normalize(glm::quat(v.w, v.x, v.y, v.z));
@@ -92,20 +124,34 @@ bool SkinRig::morphWeights(int anim, float time, int node, float* out, uint32_t 
         const size_t keys = std::min(c.times.size(), c.weights.size() / c.weightCount);
         if (keys == 0) return false;
         size_t lo = 0, hi = 0;
-        float f = 0.0f;
+        float f = 0.0f, span = 0.0f;
         if (time >= c.times[keys - 1]) {
             lo = hi = keys - 1;
         } else if (time > c.times.front()) {
             hi = static_cast<size_t>(std::upper_bound(c.times.begin(), c.times.begin() + std::ptrdiff_t(keys), time) -
                                      c.times.begin());
             lo = hi - 1;
-            const float span = c.times[hi] - c.times[lo];
-            f = c.step || span <= 0.0f ? 0.0f : (time - c.times[lo]) / span;
+            span = c.times[hi] - c.times[lo];
+            f = c.interp == Channel::Interp::Step || span <= 0.0f ? 0.0f : (time - c.times[lo]) / span;
         }
+        // Cubic entre duas chaves distintas e com as tangentes completas; nas
+        // pontas (lo == hi) o valor é o da chave, como no LINEAR.
+        const size_t need = keys * c.weightCount;
+        const bool cubic = c.interp == Channel::Interp::Cubic && lo != hi && span > 0.0f &&
+                           c.weightsIn.size() >= need && c.weightsOut.size() >= need;
+        const Hermite h = cubic ? hermite(f, span) : Hermite{};
         for (uint32_t t = 0; t < count; ++t) {
-            const float a = t < c.weightCount ? c.weights[lo * c.weightCount + t] : 0.0f;
-            const float b = t < c.weightCount ? c.weights[hi * c.weightCount + t] : 0.0f;
-            out[t] = a + (b - a) * f;
+            if (t >= c.weightCount) {
+                out[t] = 0.0f;
+                continue;
+            }
+            const float a = c.weights[lo * c.weightCount + t];
+            const float b = c.weights[hi * c.weightCount + t];
+            if (cubic)
+                out[t] = h.h00 * a + h.h10 * c.weightsOut[lo * c.weightCount + t] + h.h01 * b +
+                         h.h11 * c.weightsIn[hi * c.weightCount + t];
+            else
+                out[t] = a + (b - a) * f;
         }
         return true;
     }

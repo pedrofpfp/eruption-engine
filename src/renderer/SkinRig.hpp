@@ -6,6 +6,7 @@
 // feito na GPU (ModelRenderer, shaders/compute/skin.comp).
 #include "math/Types.hpp"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -24,12 +25,23 @@ struct SkinRig {
         std::vector<glm::mat4> inverseBind;
     };
     struct Channel {
+        // Interpolação do sampler glTF. Cubic é a spline de Hermite do
+        // apêndice C da especificação 2.0 (CUBICSPLINE): antes era reduzida a
+        // LINEAR nos valores do meio, o que achata as curvas Bezier que o
+        // exportador do Blender gera.
+        enum class Interp : uint8_t { Linear, Step, Cubic };
         int node = -1;
         int path = 0;       // 0 posição, 1 rotação, 2 escala, 3 pesos de morph
-        bool step = false;  // STEP (senão LINEAR; CUBICSPLINE vira LINEAR nos valores)
+        Interp interp = Interp::Linear;
         std::vector<float> times;
         std::vector<Vec4> values; // rotação xyzw; posição/escala xyz
+        // Tangentes de entrada (a) e de saída (b) por chave, no mesmo layout de
+        // `values`. Só preenchidas em Cubic: canais LINEAR/STEP não pagam a
+        // memória a mais.
+        std::vector<Vec4> inTan, outTan;
         std::vector<float> weights; // pesos de morph: weightCount por chave
+        // Tangentes dos pesos de morph (weightCount por chave), só em Cubic.
+        std::vector<float> weightsIn, weightsOut;
         uint32_t weightCount = 0;
     };
     struct Animation {
@@ -44,6 +56,11 @@ struct SkinRig {
     std::vector<Animation> animations;
 
     int findAnimation(const std::string& name) const;
+    // Valor de um canal de posição, rotação ou escala no tempo `time` (rotação
+    // em xyzw, normalizada no ramo Cubic). Fica público para o teste de lógica
+    // (tests/test_skinrig_sample.cpp) conferir a amostragem sem passar pelas
+    // matrizes, que normalizam a rotação e esconderiam um quaternion torto.
+    static Vec4 sampleChannel(const Channel& c, float time);
     // Matrizes de mundo (espaço do modelo) de todos os nós na pose da animação
     // `anim` no tempo `time` (anim < 0: pose de repouso).
     void pose(int anim, float time, std::vector<glm::mat4>& globals) const;
