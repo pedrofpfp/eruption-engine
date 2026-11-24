@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cfloat>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 
 namespace eruption {
@@ -29,13 +30,28 @@ struct SkinVertexGpu {
 static_assert(sizeof(SkinVertexGpu) == 24, "layout do SkinVertex em skin.comp");
 
 struct SkinPush {
-    uint32_t vertexCount, jointBase, strideWords, posWord, nrmWord, keepPrev;
+    uint32_t vertexCount, jointBase, strideWords, posWord, nrmWord;
+    uint32_t keepPrev;   // 0: sem Prev; 1: Prev = Dst anterior; 2: Prev = esta pose (troca de modo)
     uint32_t jointCount, morphCount, morphBase; // morphBase em floats no anel
+    uint32_t mode;       // 0 LBS, 1 DQS (mat4 do anel: col0 q0, col1 qe, col2.x escala)
 };
+static_assert(sizeof(SkinPush) == 40, "layout do Params em skin.comp");
+static_assert(sizeof(SkinPush) <= 128, "push constant acima de 128 bytes (AGENTS.md)");
+constexpr uint8_t kNoSkinMode = 0xFF; // SkinnedInstance::lastMode antes do 1º dispatch
 constexpr uint32_t kSkinBindings = 7;
 // Timestamps do bloco de dispatches (mapa de ocupação em PostProcessor.cpp).
 constexpr uint32_t kQSkinBegin = 64;
 constexpr uint32_t kQSkinEnd = 65;
+
+// ERUPTION_TEST_SKIN_MODE=dqs: toda instância animada nasce em DQS (A/B de
+// imagem e de skinning_ms sem mexer em script).
+ModelRenderer::SkinMode testSkinMode() {
+    static const bool dqs = [] {
+        const char* e = std::getenv("ERUPTION_TEST_SKIN_MODE");
+        return e && std::strcmp(e, "dqs") == 0;
+    }();
+    return dqs ? ModelRenderer::SkinMode::Dqs : ModelRenderer::SkinMode::Lbs;
+}
 
 } // namespace
 
@@ -49,6 +65,7 @@ void ModelRenderer::registerSkinBase(uint32_t mesh, const ModelAsset& asset, con
                           node.morphNormals.size() == node.morphPositions.size();
     if ((!hasSkin && !hasMorph) || vertices.empty()) return;
     SkinBase b;
+    b.label = asset.filePath + " (node " + node.name + ")";
     b.rig = asset.rig;
     b.skin = hasSkin ? node.skin : -1;
     b.vertexCount = static_cast<uint32_t>(vertices.size());
@@ -365,6 +382,7 @@ bool ModelRenderer::createSkinned(uint32_t base, SkinnedInstance& s) {
     m_meshes.push_back(clone);
     s.mesh = static_cast<uint32_t>(m_meshes.size() - 1);
     s.anim = -1; // pose de repouso até a cena ou um script pedir uma animação
+    s.skinMode = testSkinMode();
     return true;
 }
 
@@ -485,6 +503,34 @@ bool ModelRenderer::setMorphWeight(uint32_t instance, const std::string& target,
     return true;
 }
 
+bool ModelRenderer::applySkinMode(SkinnedInstance& s, SkinMode mode) {
+    const auto b = m_skinBases.find(s.baseMesh);
+    if (b == m_skinBases.end() || b->second.skin < 0) return false; // só morph: não há ossos para misturar
+    s.skinMode = mode;
+    return true;
+}
+
+bool ModelRenderer::setSkinningMode(uint32_t instance, SkinMode mode) {
+    const auto it = m_skinnedByInstance.find(instance);
+    return it != m_skinnedByInstance.end() && applySkinMode(m_skinned[it->second], mode);
+}
+
+ModelRenderer::SkinMode ModelRenderer::skinningMode(uint32_t instance) const {
+    const auto it = m_skinnedByInstance.find(instance);
+    return it == m_skinnedByInstance.end() ? SkinMode::Lbs : m_skinned[it->second].skinMode;
+}
+
+void ModelRenderer::setPreviewSkinMode(int id, SkinMode mode) {
+    if (SkinnedInstance* s = previewSkin(id)) applySkinMode(*s, mode);
+}
+
+bool ModelRenderer::previewSkinFellBack(int id) {
+    const SkinnedInstance* s = previewSkin(id);
+    if (!s || s->skinMode != SkinMode::Dqs) return false;
+    const auto b = m_skinBases.find(s->baseMesh);
+    return b != m_skinBases.end() && b->second.dqsFallback;
+}
+
 std::string ModelRenderer::currentAnimation(uint32_t instance) const {
     const auto it = m_skinnedByInstance.find(instance);
     if (it == m_skinnedByInstance.end()) return {};
@@ -504,13 +550,13 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
     glm::mat4* ring = m_jointMapped + size_t(frame) * kJointsPerFrame;
     uint32_t cursor = 0;
     std::vector<glm::mat4> globals;
-    struct Job { const SkinnedInstance* s; uint32_t jointBase, vertexCount, joints, morphs, morphBase; };
+    struct Job { const SkinnedInstance* s; uint32_t jointBase, vertexCount, joints, morphs, morphBase, mode; bool resetPrev; };
     std::vector<Job> jobs;
     bool boundsChanged = false;
     for (SkinnedInstance& s : m_skinned) {
         const auto b = m_skinBases.find(s.baseMesh);
         if (b == m_skinBases.end() || !s.out) continue;
-        const SkinBase& base = b->second;
+        SkinBase& base = b->second;
         const SkinRig& rig = *base.rig;
         const bool hasSkin = base.skin >= 0 && base.skin < static_cast<int>(rig.skins.size());
         const uint32_t joints = hasSkin ? static_cast<uint32_t>(rig.skins[static_cast<size_t>(base.skin)].joints.size()) : 0u;
@@ -552,14 +598,30 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
             }
         }
         if (joints == 0) {
-            jobs.push_back({&s, 0u, base.vertexCount, 0u, morphs, (frame * kJointsPerFrame + cursor) * 16u});
+            jobs.push_back({&s, 0u, base.vertexCount, 0u, morphs, (frame * kJointsPerFrame + cursor) * 16u, 0u, false});
             cursor += morphSlots;
             continue;
         }
         const SkinRig::Skin& sk = rig.skins[static_cast<size_t>(base.skin)];
         if (fading) rig.blendPose(s.fromAnim, s.fromTime, s.anim, s.time, blend, globals);
         else rig.pose(s.anim, s.time, globals);
-        rig.jointMatrices(base.skin, globals, ring + cursor);
+        // DQS no mesmo mat4 do anel. Um osso não rígido derruba esta base para LBS de
+        // vez (alternar frame a frame num rig com squash pularia na imagem e no motion blur).
+        uint32_t mode = 0;
+        if (s.skinMode == SkinMode::Dqs && !base.dqsFallback) {
+            if (rig.jointDualQuats(base.skin, globals, ring + cursor)) {
+                mode = 1;
+            } else {
+                base.dqsFallback = true;
+                ERUPTION_LOG_WARN("Skin: %s: a joint has non-uniform scale, shear or mirroring; DQS falls back to LBS",
+                                  base.label.c_str());
+            }
+        }
+        if (mode == 0) rig.jointMatrices(base.skin, globals, ring + cursor);
+        // Modo mudou (script, editor ou a queda acima): a pose anterior é de outro
+        // método; Prev recebe a pose deste frame (keepPrev = 2) e o motion blur não risca.
+        const bool resetPrev = s.lastMode != kNoSkinMode && s.lastMode != mode;
+        s.lastMode = static_cast<uint8_t>(mode);
         // Limites: cada osso com o alcance dos seus vértices.
         Vec3 lo(FLT_MAX), hi(-FLT_MAX);
         for (uint32_t j = 0; j < joints; ++j) {
@@ -589,7 +651,7 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
             boundsChanged = true;
         }
         jobs.push_back({&s, frame * kJointsPerFrame + cursor, base.vertexCount, joints, morphs,
-                        (frame * kJointsPerFrame + cursor + joints) * 16u});
+                        (frame * kJointsPerFrame + cursor + joints) * 16u, mode, resetPrev});
         cursor += joints + morphSlots;
     }
     if (jobs.empty()) return;
@@ -633,10 +695,12 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_skinPipeline);
     for (const Job& j : jobs) {
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_skinPipeLayout, 0, 1, &j.s->set, 0, nullptr);
+        // Sem prevOut o binding 4 aponta para `out`: keepPrev fica 0, nunca 2.
+        const uint32_t keepPrev = !j.s->prevOut ? 0u : (j.resetPrev ? 2u : 1u);
         const SkinPush p{j.vertexCount, j.jointBase, static_cast<uint32_t>(sizeof(TerrainVertex) / 4),
                          static_cast<uint32_t>(offsetof(TerrainVertex, position) / 4),
-                         static_cast<uint32_t>(offsetof(TerrainVertex, normal) / 4), j.s->prevOut ? 1u : 0u,
-                         j.joints, j.morphs, j.morphBase};
+                         static_cast<uint32_t>(offsetof(TerrainVertex, normal) / 4), keepPrev,
+                         j.joints, j.morphs, j.morphBase, j.mode};
         vkCmdPushConstants(cmd, m_skinPipeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
         vkCmdDispatch(cmd, (j.vertexCount + 63) / 64, 1, 1);
     }

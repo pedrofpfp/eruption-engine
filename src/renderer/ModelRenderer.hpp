@@ -966,6 +966,12 @@ public:
     // de volta para a animação). Falso se a instância não tem esse alvo.
     std::vector<std::string> morphTargetsOf(uint32_t instance) const;
     bool setMorphWeight(uint32_t instance, const std::string& target, float weight);
+    // Mistura dos ossos por instância: LBS (matrizes, o padrão) ou DQS
+    // (quaternions duais: torções não perdem volume). Falso sem esqueleto (só
+    // morph). Osso com escala não uniforme ou espelhado: desenha em LBS.
+    enum class SkinMode : uint8_t { Lbs = 0, Dqs = 1 };
+    bool setSkinningMode(uint32_t instance, SkinMode mode);
+    SkinMode skinningMode(uint32_t instance) const; // o pedido
     size_t skinnedCount() const { return m_skinned.size(); }
 
     // VISUALIZADOR DE MODELO (editor): malhas de um .glb sem instância na
@@ -984,6 +990,8 @@ public:
     uint32_t previewSkinMesh(int id);         // malha animada a desenhar
     std::vector<std::string> previewSkinAnimations(int id);
     void playPreviewSkin(int id, int anim, float speed); // anim < 0: pose de repouso
+    void setPreviewSkinMode(int id, SkinMode mode);
+    bool previewSkinFellBack(int id); // DQS pedido, mas o rig não é rígido (LBS)
     void removePreviewSkin(int id);
 
 private:
@@ -1002,6 +1010,8 @@ private:
         std::vector<float> morphDefault;
         std::vector<std::string> morphNames;
         int rigNode = -1;
+        std::string label; // "arquivo (node X)", para avisos
+        bool dqsFallback = false; // um osso não rígido: DQS desenha em LBS até recarregar
     };
     struct SkinnedInstance {
         uint32_t instance = 0, baseMesh = 0, mesh = 0;
@@ -1021,11 +1031,14 @@ private:
         float fade = 0.0f, fadeSeconds = 0.0f; // fadeSeconds 0 = sem transição
         std::vector<float> morphOverride; // peso pedido pelo script (NaN = o da animação)
         uint32_t previewId = 0; // cópia do visualizador (instance == kNoInstance)
+        SkinMode skinMode = SkinMode::Lbs;
+        uint8_t lastMode = 0xFF; // modo do último dispatch (kNoSkinMode: nenhum)
     };
     static constexpr uint32_t kNoInstance = 0xFFFFFFFFu;
     uint32_t m_previewSkinSeq = 0;
     bool createSkinned(uint32_t baseMesh, SkinnedInstance& out);
     SkinnedInstance* previewSkin(int id);
+    bool applySkinMode(SkinnedInstance& s, SkinMode mode);
     std::unordered_map<uint32_t, SkinBase> m_skinBases; // malha base -> skin
     std::vector<SkinnedInstance> m_skinned;
     std::unordered_map<uint32_t, size_t> m_skinnedByInstance;
