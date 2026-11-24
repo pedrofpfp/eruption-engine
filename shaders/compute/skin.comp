@@ -16,6 +16,15 @@
 // então um índice inválido nunca indexa joints[]. A mesma regra está em
 // src/renderer/SkinWeights.hpp (aviso da carga e tests/test_skin_weights.cpp):
 // mudou aqui, muda lá.
+//
+// DQS (p.mode = 1, Kavan et al. 2008, "Geometric Skinning with Approximate
+// Dual Quaternion Blending"): o LBS mistura matrizes, e numa torção de θ entre
+// dois ossos com pesos 0,5 a média das rotações encolhe o raio para
+// r' = r|cos(θ/2)| (em 180° a junta colapsa no eixo, o "candy wrapper"). O DQS
+// mistura quaternions duais e normaliza, então a mistura continua uma rotação
+// e o volume fica. O anel é o mesmo: em DQS cada mat4 guarda q0 na coluna 0,
+// qe na coluna 1 e a escala uniforme em joints[k][2].x (SkinRig::jointDualQuats;
+// a réplica em C++ está em tests/test_dual_quat.cpp: mudou aqui, muda lá).
 layout(local_size_x = 64) in;
 
 struct SkinVertex { uint j01; uint j23; float w0; float w1; float w2; float w3; };
@@ -37,16 +46,34 @@ layout(push_constant) uniform Params {
     uint strideWords;  // tamanho do vértice em palavras
     uint posWord;      // offset da posição (vec3)
     uint nrmWord;      // offset da normal (vec3)
-    uint keepPrev;     // 1: copia a posicao atual para Prev antes de escrever
+    uint keepPrev;     // 0: sem Prev; 1: Prev = Dst anterior; 2: Prev = esta pose (o modo mudou)
     uint jointCount;   // 0: sem ossos (so' morph)
     uint morphCount;   // alvos de morph (0 = nenhum)
     uint morphBase;    // primeiro peso no anel (em floats)
+    uint mode;         // 0: LBS; 1: DQS no mesmo mat4: col 0 = q0, col 1 = qe, col 2.x = escala uniforme
 } p;
 
 // Peso do osso j, ou 0 se o osso não existe na skin ou o peso não é um número
 // positivo finito (!(w > 0.0) pega NaN e negativos).
 float cleanWeight(uint j, float w) {
     return (j < p.jointCount && w > 0.0 && !isinf(w)) ? w : 0.0;
+}
+
+// Gira v pelo quaternion unitário q (xyz, w): v + 2 q.xyz x (q.xyz x v + q.w v).
+vec3 quatRotate(vec4 q, vec3 v) {
+    return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
+}
+
+// DQS (Kavan et al. 2008): soma o osso j (peso já limpo e normalizado) com o
+// sinal alinhado ao pivô. q e -q são a mesma rotação; sem alinhar, a soma pode
+// se anular entre ossos (antipodalidade). Peso 0 não lê o anel.
+void dqAdd(uint j, float w, vec4 pivot, inout vec4 b0, inout vec4 be, inout float sc) {
+    if (w <= 0.0) return;
+    const vec4 q0 = joints[p.jointBase + j][0];
+    const float sw = dot(q0, pivot) < 0.0 ? -w : w;
+    b0 += sw * q0;
+    be += sw * joints[p.jointBase + j][1];
+    sc += w * joints[p.jointBase + j][2].x;
 }
 
 void main() {
@@ -84,18 +111,42 @@ void main() {
             w1 /= wSum;
             w2 /= wSum;
             w3 /= wSum;
-            mat4 m = mat4(0.0);
-            if (w0 > 0.0) m += joints[p.jointBase + j0] * w0;
-            if (w1 > 0.0) m += joints[p.jointBase + j1] * w1;
-            if (w2 > 0.0) m += joints[p.jointBase + j2] * w2;
-            if (w3 > 0.0) m += joints[p.jointBase + j3] * w3;
-            sp = (m * vec4(pos, 1.0)).xyz;
-            sn = mat3(m) * nrm;
+            if (p.mode == 1u) {
+                // Pivô: o primeiro osso com peso (wSum > 0 garante que existe).
+                const uint jp = w0 > 0.0 ? j0 : (w1 > 0.0 ? j1 : (w2 > 0.0 ? j2 : j3));
+                const vec4 pivot = joints[p.jointBase + jp][0];
+                vec4 b0 = vec4(0.0);
+                vec4 be = vec4(0.0);
+                float sc = 0.0;
+                dqAdd(j0, w0, pivot, b0, be, sc);
+                dqAdd(j1, w1, pivot, b0, be, sc);
+                dqAdd(j2, w2, pivot, b0, be, sc);
+                dqAdd(j3, w3, pivot, b0, be, sc);
+                // |b0| ~ 0 não ocorre com sinais alinhados; se ocorrer, pose de bind.
+                const float n2 = dot(b0, b0);
+                if (n2 >= 1e-12) {
+                    const float r = inversesqrt(n2);
+                    const vec4 c0 = b0 * r;
+                    const vec4 ce = be * r;
+                    // t = 2 qe conj(q0), parte vetorial.
+                    const vec3 t = 2.0 * (c0.w * ce.xyz - ce.w * c0.xyz + cross(c0.xyz, ce.xyz));
+                    sp = quatRotate(c0, sc * pos) + t; // escala uniforme antes da rotação
+                    sn = quatRotate(c0, nrm);
+                }
+            } else {
+                mat4 m = mat4(0.0);
+                if (w0 > 0.0) m += joints[p.jointBase + j0] * w0;
+                if (w1 > 0.0) m += joints[p.jointBase + j1] * w1;
+                if (w2 > 0.0) m += joints[p.jointBase + j2] * w2;
+                if (w3 > 0.0) m += joints[p.jointBase + j3] * w3;
+                sp = (m * vec4(pos, 1.0)).xyz;
+                sn = mat3(m) * nrm;
+            }
         }
     }
     const float len = length(sn);
     sn = len > 1e-8 ? sn / len : nrm;
-    if (p.keepPrev != 0u) {
+    if (p.keepPrev == 1u) {
         prevDst[b + p.posWord] = dst[b + p.posWord];
         prevDst[b + p.posWord + 1u] = dst[b + p.posWord + 1u];
         prevDst[b + p.posWord + 2u] = dst[b + p.posWord + 2u];
@@ -106,4 +157,9 @@ void main() {
     dst[b + p.nrmWord] = floatBitsToUint(sn.x);
     dst[b + p.nrmWord + 1u] = floatBitsToUint(sn.y);
     dst[b + p.nrmWord + 2u] = floatBitsToUint(sn.z);
+    if (p.keepPrev == 2u) { // modo mudou: a pose anterior é de outro método
+        prevDst[b + p.posWord] = floatBitsToUint(sp.x);
+        prevDst[b + p.posWord + 1u] = floatBitsToUint(sp.y);
+        prevDst[b + p.posWord + 2u] = floatBitsToUint(sp.z);
+    }
 }
