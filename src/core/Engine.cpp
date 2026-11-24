@@ -1276,6 +1276,7 @@ bool Engine::init(int width, int height, const std::string& title) {
     m_waterReflection.init(&m_vulkan, &m_bindless);
     m_water.setSkyTexture(m_skybox.outputView(), m_skybox.outputSampler());
     if (!m_debugLineRenderer.init(&m_vulkan)) return false;
+    if (!m_skeletonLineRenderer.init(&m_vulkan)) return false;
     if (!m_overlayLineRenderer.init(&m_vulkan)) return false;
     if (!m_immediateDraw.init(&m_vulkan, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT))
         ERUPTION_LOG_WARN("ImmediateDraw nao iniciou: world.draw_strip/draw_sprite viram no-op");
@@ -1694,7 +1695,7 @@ void Engine::shutdown() {
     m_water.clearLavaMesh();
     m_water.shutdown();
     m_waterReflection.shutdown();
-    m_immediateDraw.shutdown(); m_debugLineRenderer.shutdown(); m_overlayLineRenderer.shutdown(); m_gbuffer.shutdown(); m_textureStreamer.shutdown(); m_bindless.shutdown();
+    m_immediateDraw.shutdown(); m_debugLineRenderer.shutdown(); m_skeletonLineRenderer.shutdown(); m_overlayLineRenderer.shutdown(); m_gbuffer.shutdown(); m_textureStreamer.shutdown(); m_bindless.shutdown();
 
     // Cleanup player sprites
     if (m_playerController) {

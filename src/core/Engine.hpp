@@ -1706,6 +1706,10 @@ private:
     bool m_waterReflectionOn = false;
     uint32_t m_waterReflectionDiv = 2;
     DebugLineRenderer m_debugLineRenderer;
+    // Esqueleto dos modelos animados (ModelRenderer::setShowSkeleton). Próprio:
+    // as linhas do m_debugLineRenderer só são limpas pelo PlayerController, que
+    // não roda no editor sem Play; este é refeito a cada frame com o modo ligado.
+    DebugLineRenderer m_skeletonLineRenderer;
     OverlayLineRenderer m_overlayLineRenderer;
     ImmediateDraw m_immediateDraw;
     SpriteSystem m_spriteSystem;

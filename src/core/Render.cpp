@@ -559,6 +559,14 @@ void Engine::render() {
     m_modelRenderer.flushVertexPatches(cmd);
     // Animação por esqueleto: matrizes dos ossos e vértices animados (compute).
     m_modelRenderer.updateSkinning(cmd, m_frameDt);
+    // Esqueleto (depuração): linhas da pose deste frame. upload() faz um
+    // immediateSubmit, por isso fica aqui e não dentro do passe Forward.
+    // Desligado: nada é coletado nem desenhado.
+    if (m_modelRenderer.showSkeleton()) {
+        m_skeletonLineRenderer.clearLines();
+        m_modelRenderer.collectSkeletonLines(m_skeletonLineRenderer);
+        m_skeletonLineRenderer.upload();
+    }
     flushSplatUploads(cmd);
 
     // ERUPTION_TEST_CPU_MARKS=1 (debug): collect the per-stage CPU timings in any
@@ -1633,6 +1641,9 @@ void Engine::render() {
 
     m_overlayLineRenderer.render(cmd, m_camera.viewProjJittered());
     m_debugLineRenderer.render(cmd, m_camera.viewProjJittered());
+    // Sem teste de profundidade (pipeline do DebugLineRenderer): o esqueleto
+    // aparece através da malha.
+    if (m_modelRenderer.showSkeleton()) m_skeletonLineRenderer.render(cmd, m_camera.viewProjJittered());
     m_vulkan.cmdEndRendering(cmd);
 
     // Make depth readable so the cloud-shadow fullscreen pass can reconstruct world positions.

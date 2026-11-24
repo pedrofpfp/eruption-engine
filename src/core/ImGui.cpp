@@ -1932,6 +1932,11 @@ void Engine::renderImGui() {
                 // Cor por osso nos modelos animados do mapa (magenta: sem peso válido).
                 bool skinWeights = m_modelRenderer.skinWeightView();
                 if (fx::Checkbox("Debug Skin Weights", &skinWeights)) m_modelRenderer.setSkinWeightView(skinWeights);
+                // Ossos por cima da malha (mesma cor por osso) e pose de repouso congelada.
+                bool skeleton = m_modelRenderer.showSkeleton();
+                if (fx::Checkbox("Debug Skeleton", &skeleton)) m_modelRenderer.setShowSkeleton(skeleton);
+                bool bindPose = m_modelRenderer.bindPose();
+                if (fx::Checkbox("Debug Bind Pose", &bindPose)) m_modelRenderer.setBindPose(bindPose);
                 
                 if (m_debugModelPivots && m_currentMap) {
                     if (fx::CollapsingHeader("Height Debug (Nearby)", ImGuiTreeNodeFlags_DefaultOpen)) {
