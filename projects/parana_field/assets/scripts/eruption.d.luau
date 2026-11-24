@@ -844,6 +844,10 @@ declare models: {
     -- mirroring is drawn with "lbs" (logged once). False without a skeleton.
     skinning: (model: Model) -> string,
     set_skinning: (model: Model, mode: string) -> boolean,
+    -- Debug views for every animated model of the map: `skeleton` draws the
+    -- bones over the mesh, `bind_pose` holds the rest pose (animations pause
+    -- and resume where they were). A key left out keeps its current value.
+    debug: (options: {skeleton: boolean?, bind_pose: boolean?}) -> (),
 }
 
 -- Sound: wav, ogg, mp3 or flac files of the project. Functions that start a

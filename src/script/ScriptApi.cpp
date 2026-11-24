@@ -1342,6 +1342,14 @@ int models_set_skinning(lua_State* L) {
     lua_pushboolean(L, ok);
     return 1;
 }
+// Modos de depuração globais (sem modelo): a chave ausente mantém o valor atual.
+int models_debug(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    ModelRenderer& mr = eng().modelRenderer();
+    mr.setShowSkeleton(tableBool(L, 1, "skeleton", mr.showSkeleton()));
+    mr.setBindPose(tableBool(L, 1, "bind_pose", mr.bindPose()));
+    return 0;
+}
 
 // ---------------------------------------------------------------- game (salvar)
 
@@ -3226,7 +3234,7 @@ void registerScriptApi(lua_State* L, Engine& engine) {
         ERUPTION_API_FN(models, set_surface_file),
         ERUPTION_API_FN(models, play), ERUPTION_API_FN(models, animation), ERUPTION_API_FN(models, animations),
         ERUPTION_API_FN(models, morphs), ERUPTION_API_FN(models, set_morph),
-        ERUPTION_API_FN(models, skinning), ERUPTION_API_FN(models, set_skinning),
+        ERUPTION_API_FN(models, skinning), ERUPTION_API_FN(models, set_skinning), ERUPTION_API_FN(models, debug),
         {nullptr, nullptr}};
     static const luaL_Reg characters[] = {
         ERUPTION_API_FN(characters, exists), ERUPTION_API_FN(characters, preload), ERUPTION_API_FN(characters, preload_ready),
@@ -4077,6 +4085,10 @@ declare models: {
     -- mirroring is drawn with "lbs" (logged once). False without a skeleton.
     skinning: (model: Model) -> string,
     set_skinning: (model: Model, mode: string) -> boolean,
+    -- Debug views for every animated model of the map: `skeleton` draws the
+    -- bones over the mesh, `bind_pose` holds the rest pose (animations pause
+    -- and resume where they were). A key left out keeps its current value.
+    debug: (options: {skeleton: boolean?, bind_pose: boolean?}) -> (),
 }
 
 -- Sound: wav, ogg, mp3 or flac files of the project. Functions that start a
