@@ -4,6 +4,18 @@
 // vértices compartilhado da malha e escreve no buffer próprio da instância
 // (o resto do vértice já está lá, copiado uma vez). Posição e normal são
 // palavras de 32 bits dentro do vértice (offsets no push constant).
+//
+// Validação dos pesos (LBS: v' = soma_k w_k * M_k * v, com soma_k w_k = 1):
+// glTF de exportadores ruins traz índice de osso >= jointCount (lia a matriz de
+// OUTRA instância no anel, ou fora dele), peso negativo, NaN ou infinito, e
+// soma diferente de 1 (o vértice encolhe ou cresce em direção à origem do
+// osso). Sem nenhuma influência válida a soma dava a matriz zero e o vértice
+// colapsava na origem. Por isso cada peso inválido vira 0, a soma é
+// renormalizada e, com soma < 1e-6, o vértice fica na pose de bind (mesmo
+// critério do skinning.comp do protótipo). Só os ossos com peso > 0 são lidos,
+// então um índice inválido nunca indexa joints[]. A mesma regra está em
+// src/renderer/SkinWeights.hpp (aviso da carga e tests/test_skin_weights.cpp):
+// mudou aqui, muda lá.
 layout(local_size_x = 64) in;
 
 struct SkinVertex { uint j01; uint j23; float w0; float w1; float w2; float w3; };
@@ -31,6 +43,12 @@ layout(push_constant) uniform Params {
     uint morphBase;    // primeiro peso no anel (em floats)
 } p;
 
+// Peso do osso j, ou 0 se o osso não existe na skin ou o peso não é um número
+// positivo finito (!(w > 0.0) pega NaN e negativos).
+float cleanWeight(uint j, float w) {
+    return (j < p.jointCount && w > 0.0 && !isinf(w)) ? w : 0.0;
+}
+
 void main() {
     const uint i = gl_GlobalInvocationID.x;
     if (i >= p.vertexCount) return;
@@ -51,12 +69,29 @@ void main() {
     vec3 sn = nrm;
     if (p.jointCount > 0u) {
         const SkinVertex s = skin[i];
-        const mat4 m = joints[p.jointBase + (s.j01 & 0xFFFFu)] * s.w0 +
-                       joints[p.jointBase + (s.j01 >> 16)] * s.w1 +
-                       joints[p.jointBase + (s.j23 & 0xFFFFu)] * s.w2 +
-                       joints[p.jointBase + (s.j23 >> 16)] * s.w3;
-        sp = (m * vec4(pos, 1.0)).xyz;
-        sn = mat3(m) * nrm;
+        const uint j0 = s.j01 & 0xFFFFu;
+        const uint j1 = s.j01 >> 16;
+        const uint j2 = s.j23 & 0xFFFFu;
+        const uint j3 = s.j23 >> 16;
+        float w0 = cleanWeight(j0, s.w0);
+        float w1 = cleanWeight(j1, s.w1);
+        float w2 = cleanWeight(j2, s.w2);
+        float w3 = cleanWeight(j3, s.w3);
+        const float wSum = w0 + w1 + w2 + w3;
+        // Sem influência (ou soma infinita): fica na pose de bind, com o morph.
+        if (wSum >= 1e-6 && !isinf(wSum)) {
+            w0 /= wSum;
+            w1 /= wSum;
+            w2 /= wSum;
+            w3 /= wSum;
+            mat4 m = mat4(0.0);
+            if (w0 > 0.0) m += joints[p.jointBase + j0] * w0;
+            if (w1 > 0.0) m += joints[p.jointBase + j1] * w1;
+            if (w2 > 0.0) m += joints[p.jointBase + j2] * w2;
+            if (w3 > 0.0) m += joints[p.jointBase + j3] * w3;
+            sp = (m * vec4(pos, 1.0)).xyz;
+            sn = mat3(m) * nrm;
+        }
     }
     const float len = length(sn);
     sn = len > 1e-8 ? sn / len : nrm;

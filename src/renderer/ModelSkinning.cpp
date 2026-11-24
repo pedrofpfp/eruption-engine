@@ -8,6 +8,7 @@
 #include "core/Logger.hpp"
 #include "formats/TerrainParser.hpp"
 #include "renderer/ShaderCompiler.hpp"
+#include "renderer/SkinWeights.hpp"
 #include "utils/Profiler.hpp"
 
 #include <algorithm>
@@ -104,11 +105,18 @@ void ModelRenderer::registerSkinBase(uint32_t mesh, const ModelAsset& asset, con
         std::vector<Vec3> bindPos(sk.joints.size());
         for (size_t j = 0; j < sk.joints.size(); ++j) bindPos[j] = Vec3(glm::inverse(sk.inverseBind[j])[3]);
         const uint32_t jointCount = static_cast<uint32_t>(sk.joints.size());
+        size_t badVertices = 0;
         for (size_t i = 0; i < vertices.size(); ++i) {
             SkinVertexGpu& d = data[i];
             d.j01 = node.skinJoints[i * 2];
             d.j23 = node.skinJoints[i * 2 + 1];
             const Vec4 w = node.skinWeights[i];
+            // Só conta, numa cópia do dado do arquivo: quem corrige é o skin.comp
+            // (mesma regra em SkinWeights.hpp); o aviso é para o artista.
+            SkinInfluence check{{static_cast<uint16_t>(d.j01 & 0xFFFFu), static_cast<uint16_t>(d.j01 >> 16),
+                                 static_cast<uint16_t>(d.j23 & 0xFFFFu), static_cast<uint16_t>(d.j23 >> 16)},
+                                {w.x, w.y, w.z, w.w}};
+            if (!sanitizeSkinWeights(check, jointCount)) ++badVertices;
             const uint32_t js[4] = {d.j01 & 0xFFFFu, d.j01 >> 16, d.j23 & 0xFFFFu, d.j23 >> 16};
             for (int k = 0; k < 4; ++k) {
                 d.w[k] = js[k] < jointCount ? w[k] : 0.0f; // osso fora da skin não conta
@@ -122,6 +130,9 @@ void ModelRenderer::registerSkinBase(uint32_t mesh, const ModelAsset& asset, con
                         std::max(b.jointRadius[js[k]], glm::length(vertices[i].position - bindPos[js[k]]) + maxDelta);
             }
         }
+        if (badVertices > 0)
+            ERUPTION_LOG_WARN("Skin: %zu vértices com peso/osso inválido em %s (node %s, %u ossos)", badVertices,
+                              asset.filePath.c_str(), node.name.c_str(), jointCount);
         if (!upload(data.data(), VkDeviceSize(data.size() * sizeof(SkinVertexGpu)), b.skinBuffer, b.skinAlloc)) {
             if (b.morphBuffer) vmaDestroyBuffer(m_ctx->allocator(), b.morphBuffer, b.morphAlloc);
             return;

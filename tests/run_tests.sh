@@ -78,6 +78,7 @@ run_net test_net_web $NET_SESSION
 run_src test_ribbon src/formats/Ribbon.cpp
 run_src test_pbr_stem
 run_src test_action_index
+run_src test_skin_weights
 run_src test_vision src/core/Vision.cpp
 run_src test_relief_bake src/renderer/ReliefBake.cpp
 run_src test_nav_height
