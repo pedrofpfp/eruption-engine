@@ -70,7 +70,10 @@ vec3 quatRotate(vec4 q, vec3 v) {
 void dqAdd(uint j, float w, vec4 pivot, inout vec4 b0, inout vec4 be, inout float sc) {
     if (w <= 0.0) return;
     const vec4 q0 = joints[p.jointBase + j][0];
-    const float sw = dot(q0, pivot) < 0.0 ? -w : w;
+    // -1e-3, não 0: em 180° exatos o produto é ruído de float (~-4e-8) e
+    // inverteria o osso no topo da torção (mesma zona morta de
+    // SkinRig.cpp, kDqSignTol). Ossos de fato opostos dão perto de -1.
+    const float sw = dot(q0, pivot) < -1e-3 ? -w : w;
     b0 += sw * q0;
     be += sw * joints[p.jointBase + j][1];
     sc += w * joints[p.jointBase + j][2].x;

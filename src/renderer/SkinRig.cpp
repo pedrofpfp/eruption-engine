@@ -14,6 +14,11 @@ constexpr float kRigidLen2Tol = 2e-3f;
 constexpr float kRigidDotTol = 1e-3f;
 // Abaixo disso o osso está escondido por escala 0 (truque comum de exportador).
 constexpr float kZeroScale2 = 1e-12f;
+// Zona morta do sinal do quaternion (e do alinhamento ao pivô em skin.comp).
+// Numa torção de 180° exatos o w vale cos(90°), que em float é -4,4e-8 e não 0:
+// inverter por "w < 0" trocava o lado da mistura no topo da torção e a malha
+// girava para o sentido contrário (visto no protótipo da Entrega 5).
+constexpr float kDqSignTol = 1e-3f;
 
 // Base de Hermite da CUBICSPLINE (glTF 2.0, apêndice C) em s = (t - t[k]) / td:
 // p = h00·v[k] + h10·b[k] + h01·v[k+1] + h11·a[k+1], com b a tangente de saída
@@ -206,7 +211,7 @@ bool SkinRig::dualQuat(const glm::mat4& S, glm::mat4& out) {
     }
     const glm::mat3 R(c0 / std::sqrt(l0), c1 / std::sqrt(l1), c2 / std::sqrt(l2));
     glm::quat q0 = glm::normalize(glm::quat_cast(R));
-    if (q0.w < 0.0f) q0 = -q0;
+    if (q0.w < -kDqSignTol) q0 = -q0; // tolerância: ver kDqSignTol
     const glm::quat qe = 0.5f * (glm::quat(0.0f, t.x, t.y, t.z) * q0);
     d[0] = Vec4(q0.x, q0.y, q0.z, q0.w);
     d[1] = Vec4(qe.x, qe.y, qe.z, qe.w);

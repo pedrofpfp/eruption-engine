@@ -69,7 +69,7 @@ void dqsSkin(const glm::mat4* joints, const uint32_t j[4], const float w[4], con
     for (int k = 0; k < 4; ++k) {
         if (w[k] <= 0.0f) continue;
         const Vec4 q0 = joints[j[k]][0];
-        const float sw = glm::dot(q0, pivot) < 0.0f ? -w[k] : w[k];
+        const float sw = glm::dot(q0, pivot) < -1e-3f ? -w[k] : w[k];
         b0 += sw * q0;
         be += sw * joints[j[k]][1];
         sc += w[k] * joints[j[k]][2].x;
@@ -183,12 +183,12 @@ void testPositiveW() {
                 allOk = false;
                 continue;
             }
-            if (d[0].w < 0.0f) allW = false;
+            if (d[0].w < -1e-3f) allW = false; // zona morta kDqSignTol
             worst = std::fmax(worst, maxDiff(toMatrix(d), S));
         }
     }
     check(allOk, "todas as rotacoes aceitas");
-    check(allW, "w >= 0 em todas");
+    check(allW, "w >= -1e-3 em todas");
     check(worst < 1e-5f, "todas reconstruidas (< 1e-5)");
 }
 
@@ -257,6 +257,28 @@ void testSkin() {
     check(!rig.jointDualQuats(0, globals, out), "osso esticado (1, 2, 1): falso");
 }
 
+// Torção parada em 180° exatos (o defeito visto no protótipo): w = cos(90°) em
+// float é -4,4e-8. O sentido da mistura em 180° tem que ser o mesmo de 179°,
+// senão a malha gira para o lado contrário no topo da torção.
+void testTwistHold180() {
+    std::printf("torcao parada em 180 graus\n");
+    const Vec3 x(1.0f, 0.0f, 0.0f);
+    const uint32_t j[4] = {0, 1, 0, 0};
+    const float w[4] = {0.5f, 0.5f, 0.0f, 0.0f};
+    const Vec3 p(0.0f, 1.0f, 0.0f), n(0.0f, 1.0f, 0.0f);
+    float side[2] = {0.0f, 0.0f};
+    const float degs[2] = {179.0f, 180.0f};
+    for (int i = 0; i < 2; ++i) {
+        glm::mat4 joints[2];
+        SkinRig::dualQuat(glm::mat4(1.0f), joints[0]);
+        SkinRig::dualQuat(rigid(Vec3(0.0f), glm::radians(degs[i]), x), joints[1]);
+        Vec3 sp, sn;
+        dqsSkin(joints, j, w, p, n, sp, sn);
+        side[i] = sp.z; // +90° em x leva (0,1,0) para (0,0,1)
+    }
+    check(side[0] > 0.5f && side[1] > 0.5f, "180 graus gira para o mesmo lado de 179");
+}
+
 } // namespace
 
 int main() {
@@ -268,6 +290,7 @@ int main() {
     testTwist();
     testAntipodal();
     testSkin();
+    testTwistHold180();
     std::printf(g_fail ? "HOUVE FALHA\n" : "tudo certo\n");
     return g_fail ? 1 : 0;
 }
