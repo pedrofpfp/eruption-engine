@@ -14,6 +14,7 @@
 #include "utils/MeshClusters.hpp"
 #include "utils/AlignedAllocator.hpp"
 #include "renderer/RaycastBvh.hpp"
+#include "renderer/SkeletonLines.hpp"
 
 #include <atomic>
 #include <algorithm>
@@ -31,6 +32,7 @@
 namespace eruption {
 
 struct ReliefFloorGrid;
+class DebugLineRenderer;
 
 struct ModelMeshGPU {
     // Solda da costura do deslocamento (ModelRenderer::createSeamWeld): textura
@@ -978,6 +980,18 @@ public:
     // Desligar recopia o vértice da base e a cor original volta.
     void setSkinWeightView(bool on);
     bool skinWeightView() const { return m_skinWeightView; }
+    // Esqueleto (depuração, global): com o modo ligado, updateSkinning guarda a
+    // posição de mundo de cada osso da skin das instâncias do mapa e
+    // collectSkeletonLines desenha osso -> pai e uma caixa em cada junta (mesma
+    // cor da visualização dos pesos). Desligado, nada é guardado.
+    void setShowSkeleton(bool on);
+    bool showSkeleton() const { return m_showSkeleton; }
+    void collectSkeletonLines(DebugLineRenderer& lines) const;
+    // Pose de bind (depuração, global): as instâncias do mapa ficam na pose de
+    // repouso do arquivo e o relógio das animações para; desligar retoma do
+    // mesmo ponto. Ligar e desligar não riscam o motion blur (keepPrev = 2).
+    void setBindPose(bool on);
+    bool bindPose() const { return m_bindPose; }
 
     // VISUALIZADOR DE MODELO (editor): malhas de um .glb sem instância na
     // cena, os nós com malha e uma cópia animada própria para modelos com skin.
@@ -1017,6 +1031,9 @@ private:
         int rigNode = -1;
         std::string label; // "arquivo (node X)", para avisos
         bool dqsFallback = false; // um osso não rígido: DQS desenha em LBS até recarregar
+        // Pai de cada osso na skin (skinJointParents), preenchido na primeira vez
+        // que o esqueleto é desenhado; vazio enquanto o modo nunca foi ligado.
+        std::vector<int> jointParent;
     };
     struct SkinnedInstance {
         uint32_t instance = 0, baseMesh = 0, mesh = 0;
@@ -1026,7 +1043,7 @@ private:
         VmaAllocation prevOutAlloc = VK_NULL_HANDLE;
         VkDescriptorSet set = VK_NULL_HANDLE;
         bool needsInit = true;
-        bool restorePrev = false; // recopiado ao desligar os pesos: Prev = a pose do frame
+        bool restorePrev = false; // a pose saltou (pesos desligados, bind pose): Prev = a pose do frame
         int anim = -1;
         float time = 0.0f, speed = 1.0f;
         bool loop = true;
@@ -1045,6 +1062,9 @@ private:
     bool createSkinned(uint32_t baseMesh, SkinnedInstance& out);
     SkinnedInstance* previewSkin(int id);
     bool applySkinMode(SkinnedInstance& s, SkinMode mode);
+    // Junta as juntas desta instância a m_skeletonJoints (posições de mundo).
+    void appendSkeleton(SkinBase& base, const SkinRig::Skin& sk, const ModelInstance& inst,
+                        const std::vector<glm::mat4>& globals);
     std::unordered_map<uint32_t, SkinBase> m_skinBases; // malha base -> skin
     std::vector<SkinnedInstance> m_skinned;
     std::unordered_map<uint32_t, size_t> m_skinnedByInstance;
@@ -1750,6 +1770,9 @@ private:
     uint32_t m_lastDrawCalls = 0;
     uint32_t m_lastSkinVertices = 0, m_lastSkinJoints = 0;
     bool m_skinWeightView = false; // init lê ERUPTION_TEST_SKIN_WEIGHTS
+    bool m_showSkeleton = false;   // init lê ERUPTION_TEST_SKELETON
+    bool m_bindPose = false;
+    std::vector<SkeletonJoint> m_skeletonJoints; // do último updateSkinning (só com m_showSkeleton)
 };
 
 } // namespace eruption

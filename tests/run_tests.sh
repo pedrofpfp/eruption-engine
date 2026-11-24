@@ -84,6 +84,7 @@ run_src test_vision src/core/Vision.cpp
 run_src test_relief_bake src/renderer/ReliefBake.cpp
 run_src test_nav_height
 run_src test_skinrig_sample src/renderer/SkinRig.cpp
+run_src test_skeleton_lines
 run_src test_bandwidth_meter src/renderer/BandwidthMeter.cpp src/utils/Profiler.cpp src/core/Logger.cpp -lpthread
 run_src test_minimap_walk src/core/MinimapWalk.cpp src/utils/AssetVfs.cpp src/core/Project.cpp src/core/Logger.cpp src/core/JobSystem.cpp -pthread -I build/_deps/nlohmann_json-src/include
 

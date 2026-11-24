@@ -6,6 +6,7 @@
 #include "renderer/GBuffer.hpp"
 
 #include "core/Logger.hpp"
+#include "renderer/DebugLineRenderer.hpp"
 #include "formats/TerrainParser.hpp"
 #include "renderer/ShaderCompiler.hpp"
 #include "renderer/SkinWeights.hpp"
@@ -538,6 +539,53 @@ void ModelRenderer::setSkinWeightView(bool on) {
     }
 }
 
+void ModelRenderer::setShowSkeleton(bool on) {
+    m_showSkeleton = on;
+    // Desligado não guarda nada (updateSkinning nem olha os ossos): solta a memória.
+    if (!on) std::vector<SkeletonJoint>().swap(m_skeletonJoints);
+}
+
+void ModelRenderer::setBindPose(bool on) {
+    if (on == m_bindPose) return;
+    m_bindPose = on;
+    // A pose salta de uma vez (animação <-> repouso): Prev recebe a pose do
+    // próximo frame (keepPrev = 2), senão o motion blur riscaria o salto.
+    for (SkinnedInstance& s : m_skinned)
+        if (s.instance != kNoInstance) s.restorePrev = true; // o visualizador não entra no modo
+}
+
+void ModelRenderer::appendSkeleton(SkinBase& base, const SkinRig::Skin& sk, const ModelInstance& inst,
+                                   const std::vector<glm::mat4>& globals) {
+    const SkinRig& rig = *base.rig;
+    if (base.jointParent.size() != sk.joints.size()) {
+        std::vector<int> nodeParent(rig.nodes.size());
+        for (size_t n = 0; n < rig.nodes.size(); ++n) nodeParent[n] = rig.nodes[n].parent;
+        skinJointParents(nodeParent, sk.joints, base.jointParent);
+    }
+    // Caixa da junta com aresta de 1% da altura da instância (os limites já são
+    // os desta pose): aparece num boneco de 2 m e num de 20 cm sem tampar os ossos.
+    const float height = inst.worldAabbMax.y - inst.worldAabbMin.y;
+    const float half = height > 0.0f ? height * 0.005f : 0.01f;
+    const int first = static_cast<int>(m_skeletonJoints.size());
+    for (size_t j = 0; j < sk.joints.size(); ++j) {
+        const int n = sk.joints[j];
+        const Vec3 local = n >= 0 && n < static_cast<int>(globals.size()) ? Vec3(globals[static_cast<size_t>(n)][3]) : Vec3(0.0f);
+        SkeletonJoint out;
+        out.pos = Vec3(inst.transform * Vec4(local, 1.0f));
+        out.parent = base.jointParent[j] >= 0 ? first + base.jointParent[j] : -1;
+        out.joint = static_cast<uint32_t>(j);
+        out.half = half;
+        m_skeletonJoints.push_back(out);
+    }
+}
+
+void ModelRenderer::collectSkeletonLines(DebugLineRenderer& lines) const {
+    std::vector<SkeletonSegment> bones, boxes;
+    skeletonSegments(m_skeletonJoints, bones, boxes);
+    for (const SkeletonSegment& b : bones) lines.addLine(b.a, b.b, b.color);
+    for (const SkeletonSegment& b : boxes) lines.addBox(b.a, b.b, b.color);
+}
+
 void ModelRenderer::setPreviewSkinMode(int id, SkinMode mode) {
     if (SkinnedInstance* s = previewSkin(id)) applySkinMode(*s, mode);
 }
@@ -563,6 +611,7 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
     // mostra 0, e não a contagem velha do último frame que animou.
     m_lastSkinVertices = 0;
     m_lastSkinJoints = 0;
+    m_skeletonJoints.clear(); // vazio sempre que o modo está desligado (setShowSkeleton)
     if (m_skinned.empty() || !m_skinPipeline || !m_jointMapped) return;
     const uint32_t frame = m_ctx->currentFrame() % VulkanContext::MAX_FRAMES_IN_FLIGHT;
     glm::mat4* ring = m_jointMapped + size_t(frame) * kJointsPerFrame;
@@ -582,6 +631,9 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
         const uint32_t morphSlots = (morphs + 15) / 16; // 16 pesos por mat4 do anel
         if ((joints == 0 && morphs == 0) || cursor + joints + morphSlots > kJointsPerFrame)
             continue; // anel cheio: fica parado neste frame
+        // Pose de bind (setBindPose): só as instâncias do mapa; o relógio e a
+        // transição ficam parados para a animação retomar do mesmo ponto.
+        const bool bind = m_bindPose && s.instance != kNoInstance;
         // Tempo da animação (e da que sai, durante a transição).
         auto advance = [&](int anim, float& time, float speed, bool loop) {
             if (anim < 0 || anim >= static_cast<int>(rig.animations.size())) return;
@@ -592,8 +644,8 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
                 else if (time >= dur) time = dur;
             }
         };
-        advance(s.anim, s.time, s.speed, s.loop);
-        const bool fading = s.fade < s.fadeSeconds;
+        if (!bind) advance(s.anim, s.time, s.speed, s.loop);
+        const bool fading = !bind && s.fade < s.fadeSeconds;
         float blend = 1.0f;
         if (fading) {
             advance(s.fromAnim, s.fromTime, s.fromSpeed, s.fromLoop);
@@ -608,11 +660,12 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
             float cur[64], from[64];
             const uint32_t n = std::min(morphs, 64u);
             for (uint32_t t = 0; t < n; ++t) cur[t] = from[t] = base.morphDefault[t];
-            rig.morphWeights(s.anim, s.time, base.rigNode, cur, n);
+            // Pose de bind: só o padrão do arquivo (sem animação nem o peso do script).
+            if (!bind) rig.morphWeights(s.anim, s.time, base.rigNode, cur, n);
             if (fading) rig.morphWeights(s.fromAnim, s.fromTime, base.rigNode, from, n);
             for (uint32_t t = 0; t < n; ++t) {
                 out[t] = fading ? from[t] + (cur[t] - from[t]) * blend : cur[t];
-                if (t < s.morphOverride.size() && !std::isnan(s.morphOverride[t])) out[t] = s.morphOverride[t];
+                if (!bind && t < s.morphOverride.size() && !std::isnan(s.morphOverride[t])) out[t] = s.morphOverride[t];
             }
         }
         // Desligou a visualização dos pesos: needsInit (setSkinWeightView) recopia
@@ -626,7 +679,8 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
             continue;
         }
         const SkinRig::Skin& sk = rig.skins[static_cast<size_t>(base.skin)];
-        if (fading) rig.blendPose(s.fromAnim, s.fromTime, s.anim, s.time, blend, globals);
+        if (bind) rig.pose(-1, 0.0f, globals); // repouso do arquivo (o mesmo de models.play(id, ""))
+        else if (fading) rig.blendPose(s.fromAnim, s.fromTime, s.anim, s.time, blend, globals);
         else rig.pose(s.anim, s.time, globals);
         // DQS no mesmo mat4 do anel. Um osso não rígido derruba esta base para LBS de
         // vez (alternar frame a frame num rig com squash pularia na imagem e no motion blur).
@@ -673,6 +727,9 @@ void ModelRenderer::updateSkinning(VkCommandBuffer cmd, float dt) {
             inst.boundingRadius = glm::length(wMax - wMin) * 0.5f;
             boundsChanged = true;
         }
+        if (m_showSkeleton && s.instance != kNoInstance && s.instance < m_instances.size() &&
+            m_instances[s.instance].enabled)
+            appendSkeleton(base, sk, m_instances[s.instance], globals);
         jobs.push_back({&s, frame * kJointsPerFrame + cursor, base.vertexCount, joints, morphs,
                         (frame * kJointsPerFrame + cursor + joints) * 16u, mode, resetPrev});
         cursor += joints + morphSlots;

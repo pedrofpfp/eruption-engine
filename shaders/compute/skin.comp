@@ -93,7 +93,8 @@ void dqAdd(uint j, float w, vec4 pivot, inout vec4 b0, inout vec4 be, inout floa
 
 // Cor do osso j: matiz pela razão áurea (ossos vizinhos na lista ficam com
 // matizes distantes), S = V = 1, puxada 15% para o branco para a luz não
-// apagar os tons escuros (a mesma função do protótipo da Entrega 5).
+// apagar os tons escuros (a mesma função do protótipo da Entrega 5). Réplica
+// em C++ para as linhas do esqueleto: skeletonJointColor (SkeletonLines.hpp).
 vec3 jointColor(uint j) {
     const float h = fract(float(j) * 0.61803398875 + 0.15);
     const vec3 k = clamp(abs(fract(h + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
