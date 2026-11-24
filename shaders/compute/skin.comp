@@ -184,7 +184,9 @@ void main() {
     dst[b + p.nrmWord] = floatBitsToUint(sn.x);
     dst[b + p.nrmWord + 1u] = floatBitsToUint(sn.y);
     dst[b + p.nrmWord + 2u] = floatBitsToUint(sn.z);
-    if (p.debugView == 1u) dst[b + p.colWord] = packUnorm4x8(vec4(weightColor, 254.0 / 255.0));
+    // Só malhas com esqueleto: uma malha só de morph não tem pesos de osso e,
+    // pintada de magenta, pareceria um rig quebrado.
+    if (p.debugView == 1u && p.jointCount > 0u) dst[b + p.colWord] = packUnorm4x8(vec4(weightColor, 254.0 / 255.0));
     if (p.keepPrev == 2u) { // modo mudou: a pose anterior é de outro método
         prevDst[b + p.posWord] = floatBitsToUint(sp.x);
         prevDst[b + p.posWord + 1u] = floatBitsToUint(sp.y);
