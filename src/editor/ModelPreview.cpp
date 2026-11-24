@@ -304,6 +304,7 @@ bool ModelPreview::open(const std::string& assetPath, int node) {
     m_node = node;
     animation = -1;
     m_playing = -2;
+    m_playingSkinning = -1;
     computeBounds();
     frame();
     return true;
@@ -368,6 +369,12 @@ void ModelPreview::zoom(float wheel) {
     m_dist = std::max(0.01f, m_dist * std::pow(0.88f, wheel));
 }
 
+bool ModelPreview::skinningFellBack() const {
+    for (const Node& n : m_nodes)
+        if (n.skin >= 0 && m_models->previewSkinFellBack(n.skin)) return true;
+    return false;
+}
+
 ModelPreview::Stats ModelPreview::stats() const {
     Stats s;
     s.nodes = m_nodes.size();
@@ -412,6 +419,12 @@ void ModelPreview::render(VkCommandBuffer cmd, float dt) {
             if (n.skin >= 0) m_models->playPreviewSkin(n.skin, animation, animationSpeed);
         m_playing = animation;
         m_playingSpeed = animationSpeed;
+    }
+    if (m_playingSkinning != skinning) {
+        const auto mode = skinning == 1 ? ModelRenderer::SkinMode::Dqs : ModelRenderer::SkinMode::Lbs;
+        for (const Node& n : m_nodes)
+            if (n.skin >= 0) m_models->setPreviewSkinMode(n.skin, mode);
+        m_playingSkinning = skinning;
     }
 
     barrier(m_ctx, cmd, m_color, m_colorReadable ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,

@@ -164,6 +164,14 @@ void Editor::drawModelViewer() {
                 ImGui::EndCombo();
             }
             ImGui::SliderFloat(tr("Speed"), &pv.animationSpeed, 0.0f, 3.0f, "%.2fx");
+            static const char* const kSkinModes[] = {"LBS", "DQS"};
+            ImGui::Combo(tr("Skinning"), &pv.skinning, kSkinModes, 2);
+            ImGui::SetItemTooltip("%s", tr("LBS mixes the bone matrices (the default; twisted joints lose volume). DQS mixes dual quaternions: twists keep the volume."));
+            if (pv.skinning == 1 && pv.skinningFellBack()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::TextWrapped("%s", tr("A bone has non-uniform scale or mirroring: drawn with LBS."));
+                ImGui::PopStyleColor();
+            }
         }
 
         ImGui::SeparatorText(tr("Model"));

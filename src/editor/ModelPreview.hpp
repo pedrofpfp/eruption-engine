@@ -56,6 +56,8 @@ public:
     std::vector<std::string> animations() const { return m_animations; }
     int animation = -1;
     float animationSpeed = 1.0f;
+    int skinning = 0; // 0 LBS, 1 DQS (cópias animadas do visualizador)
+    bool skinningFellBack() const;
 
     // Números do que está na tela.
     struct Stats {
@@ -111,6 +113,7 @@ private:
     std::vector<std::string> m_animations;
     int m_playing = -2;
     float m_playingSpeed = 1.0f;
+    int m_playingSkinning = -1;
     Vec3 m_boundsMin{0.0f}, m_boundsMax{0.0f};
     Vec3 m_target{0.0f};
     float m_yaw = 0.6f, m_pitch = 0.35f, m_dist = 10.0f;
