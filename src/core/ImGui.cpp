@@ -1929,6 +1929,9 @@ void Engine::renderImGui() {
             ImGui::SetNextWindowBgAlpha(0.85f);
             if (ImGui::Begin("Object Manager (F1)", &m_showObjectMenu)) {
                 fx::Checkbox("Debug Model Pivots (Red Line)", &m_debugModelPivots);
+                // Cor por osso nos modelos animados do mapa (magenta: sem peso válido).
+                bool skinWeights = m_modelRenderer.skinWeightView();
+                if (fx::Checkbox("Debug Skin Weights", &skinWeights)) m_modelRenderer.setSkinWeightView(skinWeights);
                 
                 if (m_debugModelPivots && m_currentMap) {
                     if (fx::CollapsingHeader("Height Debug (Nearby)", ImGuiTreeNodeFlags_DefaultOpen)) {
